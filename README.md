@@ -121,6 +121,17 @@ task_profiles:
 3. 编写单元测试和压力测试（多 provider 并发调度，故障注入）
 4. 优化自适应策略（在线学习：历史表现 + 负载预测）
 
+## 管理界面（Dashboard）
+
+- 提供 Web UI，显示当前 provider 列表、模型池、状态、健康得分、延迟、错误率、QPS、成本等级。
+- 支持按任务类别筛选（交易 / 分析 / 文本），查看当前调度策略与当前选中模型。
+- 支持手动优先/屏蔽 provider，并对不稳定 provider 触发“强制淘汰”标签。
+- 提供实时查询刷新（ws 或 Server-Sent Events）与历史趋势图（30m/1h/6h/24h）。
+- 提供“从 GitHub 更新清单”按钮：
+  - 通过 `git pull` 或 GitHub API 更新 `freellm-res/README.md` 及 provider 配置模板
+  - 自动解析更新后新增的 free provider、模型、限额信息，并入本地 `providers` registry
+  - 可在 UI 内触发 “手动同步 + 回滚”（若更新导致异常）
+
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！

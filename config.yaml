@@ -1,0 +1,41 @@
+providers:
+  - name: openrouter
+    type: openrouter
+    api_key: "YOUR_OPENROUTER_KEY"
+    free: true
+    models:
+      - id: "gemma-3-12b-it:free"
+        tags: ["analysis", "text"]
+        free: true
+      - id: "llama-3.2-3b-instruct:free"
+        tags: ["trading", "text"]
+        free: true
+
+  - name: google_ai_studio
+    type: google_ai_studio
+    api_key: "YOUR_GOOGLE_KEY"
+    free: false
+    models:
+      - id: "gemini-3-flash"
+        tags: ["analysis", "text"]
+        free: false
+
+scheduler:
+  strategy: "adaptive"
+  max_retries: 3
+  timeout_seconds: 20
+  eviction:
+    error_rate: 0.2
+    p90_latency_ms: 1200
+    cool_down_sec: 300
+
+task_profiles:
+  trading:
+    priority: ["low_latency", "reliability"]
+    candidate_tags: ["trading"]
+  analysis:
+    priority: ["throughput", "context"]
+    candidate_tags: ["analysis"]
+  text:
+    priority: ["quality", "free"]
+    candidate_tags: ["text"]
