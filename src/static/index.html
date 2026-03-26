@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FreeLLM Router | Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: hsl(222, 47%, 11%);
+            --card-bg: hsla(222, 47%, 15%, 0.8);
+            --accent-primary: hsl(199, 89%, 48%);
+            --accent-secondary: hsl(263, 70%, 50%);
+            --status-healthy: hsl(142, 71%, 45%);
+            --status-unstable: hsl(0, 72%, 51%);
+            --status-cooling: hsl(48, 96%, 53%);
+            --text-main: hsl(0, 0%, 98%);
+            --text-dim: hsl(215, 20%, 65%);
+            --border-glow: hsla(199, 89%, 48%, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 2rem;
+            background-image: 
+                radial-gradient(circle at 10% 20%, hsla(199, 89%, 48%, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, hsla(263, 70%, 50%, 0.05) 0%, transparent 40%);
+            overflow-x: hidden;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid hsla(0, 0%, 100%, 0.1);
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+        }
+
+        button {
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            border: 1px solid hsla(0, 0%, 100%, 0.1);
+            background: var(--card-bg);
+            color: var(--text-main);
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        button:hover {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 15px var(--border-glow);
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button.primary {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border: none;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+        }
+
+        .provider-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 1.5rem;
+            border: 1px solid hsla(0, 0%, 100%, 0.05);
+            backdrop-filter: blur(12px);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .provider-card:hover {
+            transform: scale(1.02);
+            border-color: hsla(199, 89%, 48%, 0.3);
+        }
+
+        .provider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .provider-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+        }
+
+        .status-healthy { background: hsla(142, 71%, 45%, 0.2); color: var(--status-healthy); }
+        .status-unstable { background: hsla(0, 72%, 51%, 0.2); color: var(--status-unstable); }
+        .status-cooling_down { background: hsla(48, 96%, 53%, 0.2); color: var(--status-cooling); }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background: hsla(0, 0%, 0%, 0.2);
+            border-radius: 12px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .metric-label {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        .metric-value {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .model-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .model-tag {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.5rem;
+            background: hsla(0, 0%, 100%, 0.05);
+            border-radius: 4px;
+            color: var(--text-dim);
+            border: 1px solid hsla(0, 0%, 100%, 0.05);
+        }
+
+        .model-tag.free {
+            border-color: hsla(142, 71%, 45%, 0.3);
+            color: var(--status-healthy);
+        }
+
+        .loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));
+            transform: translateX(-100%);
+            transition: transform 0.5s ease;
+            z-index: 1000;
+        }
+
+        .loader.active {
+            transform: translateX(0);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .live-indicator {
+            width: 8px;
+            height: 8px;
+            background: var(--status-healthy);
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+            box-shadow: 0 0 10px var(--status-healthy);
+            animation: pulse 2s infinite;
+        }
+
+        #notification {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 2rem;
+            background: var(--card-bg);
+            border: 1px solid var(--accent-primary);
+            border-radius: 12px;
+            transform: translateY(200%);
+            transition: transform 0.3s ease;
+            z-index: 1001;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        #notification.show {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <div id="loader" class="loader"></div>
+    
+    <header>
+        <div>
+            <h1>FreeLLM Router</h1>
+            <p style="color: var(--text-dim); font-size: 0.9rem;">
+                <span class="live-indicator"></span>Adaptive Resource Monitoring
+            </p>
+        </div>
+        <div class="controls">
+            <button onclick="syncResources()">Sync Resources</button>
+            <button class="primary" onclick="refreshData()">Refresh</button>
+        </div>
+    </header>
+
+    <main class="stats-grid" id="provider-grid">
+        <!-- Cards injected here -->
+    </main>
+
+    <div id="notification"></div>
+
+    <script>
+        async function refreshData() {
+            setLoader(true);
+            try {
+                const response = await fetch('/v1/providers');
+                const providers = await response.json();
+                renderProviders(providers);
+            } catch (err) {
+                showNotification("Failed to fetch data", "error");
+            } finally {
+                setTimeout(() => setLoader(false), 300);
+            }
+        }
+
+        function renderProviders(providers) {
+            const grid = document.getElementById('provider-grid');
+            grid.innerHTML = providers.map(p => `
+                <div class="provider-card">
+                    <div class="provider-header">
+                        <div class="provider-name">${p.name}</div>
+                        <span class="status-badge status-${p.status}">${p.status.replace('_', ' ')}</span>
+                    </div>
+                    <div class="metrics">
+                        <div class="metric-item">
+                            <span class="metric-label">Latency (P99)</span>
+                            <span class="metric-value">${p.p99_latency ? p.p99_latency.toFixed(0) + 'ms' : 'N/A'}</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Error Rate</span>
+                            <span class="metric-value">${(p.avg_error_rate * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Retries</span>
+                            <span class="metric-value">${p.retry_count}</span>
+                        </div>
+                    </div>
+                    <div class="model-list">
+                        ${p.models.slice(0, 8).map(m => `
+                            <span class="model-tag ${m.free ? 'free' : ''}" title="Avg Latency: ${m.avg_latency ? m.avg_latency.toFixed(0) : 'N/A'}ms">
+                                ${m.id.split('/').pop()}
+                            </span>
+                        `).join('')}
+                        ${p.models.length > 8 ? `<span class="model-tag">+${p.models.length - 8} more</span>` : ''}
+                    </div>
+                    <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem;">
+                        <button style="font-size: 0.7rem; padding: 0.4rem 0.8rem;" onclick="providerAction('${p.name}', '${p.status === 'unstable' ? 'enable' : 'disable'}')">
+                            ${p.status === 'unstable' ? 'Restore' : 'Isolate'}
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function providerAction(name, action) {
+            try {
+                const res = await fetch('/admin/providers/action', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({provider: name, action: action})
+                });
+                if (res.ok) {
+                    showNotification(`${name} marked as ${action === 'enable' ? 'healthy' : 'unstable'}`);
+                    refreshData();
+                }
+            } catch (err) {
+                showNotification("Action failed", "error");
+            }
+        }
+
+        async function syncResources() {
+            setLoader(true);
+            try {
+                const res = await fetch('/admin/providers/sync', {method: 'POST'});
+                const data = await res.json();
+                showNotification(`Synced ${data.synced_providers} providers from GitHub!`);
+                refreshData();
+            } catch (err) {
+                showNotification("Sync failed", "error");
+            } finally {
+                setLoader(false);
+            }
+        }
+
+        function setLoader(active) {
+            document.getElementById('loader').classList.toggle('active', active);
+        }
+
+        function showNotification(msg, type = "success") {
+            const n = document.getElementById('notification');
+            n.innerText = msg;
+            n.style.borderColor = type === "error" ? "var(--status-unstable)" : "var(--accent-primary)";
+            n.classList.add('show');
+            setTimeout(() => n.classList.remove('show'), 3000);
+        }
+
+        // Initial load
+        refreshData();
+        // Background refresh every 30s
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>
