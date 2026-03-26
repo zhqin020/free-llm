@@ -12,6 +12,8 @@ from .scheduler import Scheduler
 from .router import Router
 from .admin import sync_from_github
 
+from .database import DatabaseManager
+
 app = FastAPI(title="FreeLLM Router")
 
 # Models for OpenAI compatibility
@@ -31,24 +33,25 @@ class ProviderAction(BaseModel):
     provider: str
     action: str
 
-
 # Globals
+DB_PATH = os.path.join(os.path.dirname(__file__), "../freellm.db")
+db = DatabaseManager(DB_PATH)
+
+registry = ProviderRegistry()
+
+# Load from DB
+for p in db.load_all_providers():
+    registry.add_provider(p)
+
+# Load additional config for managers
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "../config.yaml")
 cfg = load_config(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else None
 
-registry = ProviderRegistry()
-if cfg:
-    for p in cfg.providers:
-        provider_state = ProviderState(name=p.name, type=p.type, free=p.free, api_key=p.api_key)
-        for m in p.models:
-            provider_state.models[m.id] = ModelState(id=m.id, tags=m.tags, free=m.free)
-        provider_state.status = "healthy"
-        registry.add_provider(provider_state)
-
-health_manager = HealthManager(registry, config=(cfg.scheduler.eviction if cfg else {}))
-scheduler = Scheduler(registry, cfg.task_profiles if cfg else {}, cfg.scheduler.__dict__ if cfg else {})
+health_manager = HealthManager(registry, config=cfg.scheduler.eviction if cfg else {})
+scheduler = Scheduler(registry, 
+                      task_profiles={k: vars(v) for k, v in cfg.task_profiles.items()} if cfg else {},
+                      scheduler_config=vars(cfg.scheduler) if cfg else {})
 router = Router(registry, health_manager, scheduler)
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -61,9 +64,35 @@ async def startup_event():
     async def periodic_health_check():
         while True:
             health_manager.evaluate()
+            # Save health results back to DB
+            for p in registry.all_providers():
+                db.save_provider(p)
             await asyncio.sleep(60) # Every minute
     
     asyncio.create_task(periodic_health_check())
+
+class ProviderUpdate(BaseModel):
+    name: str
+    api_key: Optional[str] = None
+    url: Optional[str] = None
+    token_price_1k: Optional[float] = None
+    max_quota_min: Optional[int] = None
+    max_quota_day: Optional[int] = None
+
+@app.post("/admin/providers/update")
+async def update_provider(upd: ProviderUpdate):
+    p = registry.get_provider(upd.name)
+    if not p:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    
+    if upd.api_key is not None: p.api_key = upd.api_key
+    if upd.url is not None: p.url = upd.url
+    if upd.token_price_1k is not None: p.token_price_1k = upd.token_price_1k
+    if upd.max_quota_min is not None: p.max_quota_min = upd.max_quota_min
+    if upd.max_quota_day is not None: p.max_quota_day = upd.max_quota_day
+    
+    db.save_provider(p)
+    return {"status": "success", "provider": p.name}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -99,6 +128,13 @@ def list_providers():
             "name": p.name,
             "type": p.type,
             "free": p.free,
+            "api_key": p.api_key if p.api_key else "",
+            "url": p.url if p.url else "",
+            "token_price_1k": p.token_price_1k,
+            "max_quota_min": p.max_quota_min,
+            "max_quota_day": p.max_quota_day,
+            "current_quota_min": p.current_quota_min,
+            "current_quota_day": p.current_quota_day,
             "status": p.status,
             "retry_count": p.retry_count,
             "avg_error_rate": p.average_error_rate,
@@ -148,7 +184,7 @@ def sync_providers():
     if not os.path.exists(res_path):
          res_path = os.path.join(os.path.dirname(__file__), "../../freellm-res")
 
-    result = sync_from_github(res_path, registry)
+    result = sync_from_github(res_path, registry, db=db)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
     return result

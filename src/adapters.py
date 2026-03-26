@@ -3,24 +3,21 @@ import json
 from typing import Dict, Any, List
 
 class BaseAdapter:
-    def chat_completion(self, api_key: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+    def chat_completion(self, api_key: str, url: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         """
-        Base method for chat completions. Should be overridden by specific provider adapters.
+        Base method for chat completions.
         """
         raise NotImplementedError
 
-class OpenRouterAdapter(BaseAdapter):
-    def chat_completion(self, api_key: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
-        url = "https://openrouter.ai/api/v1/chat/completions"
+class GenericOpenAIAdapter(BaseAdapter):
+    def chat_completion(self, api_key: str, url: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/freellm-res", # Required by OpenRouter for some models
-            "X-Title": "FreeLLM Router",
         }
         
-        # Filter out task_type and other router-specific kwargs
-        api_kwargs = {k: v for k, v in kwargs.items() if k not in ["task_type", "timeout"]}
+        excluded_keys = ["task_type", "timeout", "max_retries", "model"]
+        api_kwargs = {k: v for k, v in kwargs.items() if k not in excluded_keys}
         
         payload = {
             "model": model_id,
@@ -34,18 +31,33 @@ class OpenRouterAdapter(BaseAdapter):
             json=payload, 
             timeout=kwargs.get("timeout", 20)
         )
-        response.raise_for_status()
-        return response.json()
+        
+        if not response.ok:
+            try:
+                err_data = response.json()
+                msg = err_data.get("error", {}).get("message", response.text)
+            except:
+                msg = response.text
+            raise Exception(f"{response.status_code} Client Error: {msg} for url: {url}")
+            
+        try:
+            return response.json()
+        except Exception as e:
+            raise Exception(f"Failed to parse JSON response from {url}: {response.text[:100]}...")
 
-class GoogleStudioAdapter(BaseAdapter):
-    def chat_completion(self, api_key: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
-        # Google AI Studio OpenAI-compatible endpoint
-        url = f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions?key={api_key}"
+class OpenRouterAdapter(GenericOpenAIAdapter):
+    def chat_completion(self, api_key: str, url: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+        # OpenRouter always uses its specific endpoint regardless of database URL
+        target_url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/freellm-res", 
+            "X-Title": "FreeLLM Router",
         }
         
-        api_kwargs = {k: v for k, v in kwargs.items() if k not in ["task_type", "timeout"]}
+        excluded_keys = ["task_type", "timeout", "max_retries", "model"]
+        api_kwargs = {k: v for k, v in kwargs.items() if k not in excluded_keys}
         
         payload = {
             "model": model_id,
@@ -54,7 +66,37 @@ class GoogleStudioAdapter(BaseAdapter):
         }
         
         response = requests.post(
-            url, 
+            target_url, 
+            headers=headers, 
+            json=payload, 
+            timeout=kwargs.get("timeout", 20)
+        )
+        response.raise_for_status()
+        return response.json()
+
+class GoogleStudioAdapter(BaseAdapter):
+    def chat_completion(self, api_key: str, url: str, model_id: str, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+        # Use the URL from database, but ensure it has the API key
+        target_url = url
+        if "key=" not in target_url:
+            sep = "&" if "?" in target_url else "?"
+            target_url = f"{target_url}{sep}key={api_key}"
+            
+        headers = {
+            "Content-Type": "application/json",
+        }
+        
+        excluded_keys = ["task_type", "timeout", "max_retries", "model"]
+        api_kwargs = {k: v for k, v in kwargs.items() if k not in excluded_keys}
+        
+        payload = {
+            "model": model_id,
+            "messages": messages,
+            **api_kwargs
+        }
+        
+        response = requests.post(
+            target_url, 
             headers=headers, 
             json=payload, 
             timeout=kwargs.get("timeout", 20)
@@ -64,11 +106,16 @@ class GoogleStudioAdapter(BaseAdapter):
 
 class AdapterRegistry:
     def __init__(self):
+        generic = GenericOpenAIAdapter()
         self._adapters = {
             "openrouter": OpenRouterAdapter(),
             "google_ai_studio": GoogleStudioAdapter(),
-            # Fallback for generic OpenAI-compatible providers
-            "openai": OpenRouterAdapter(), 
+            "openai": generic,
+            "deepseek": generic,
+            "groq": generic,
+            "mistral": generic,
+            "nvidia": generic,
+            "siliconflow": generic,
         }
 
     def get_adapter(self, provider_type: str) -> BaseAdapter:

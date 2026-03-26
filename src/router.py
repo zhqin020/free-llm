@@ -31,6 +31,7 @@ class Router:
             try:
                 response = adapter.chat_completion(
                     api_key=provider.api_key,
+                    url=provider.url,
                     model_id=model_id,
                     messages=messages,
                     **kwargs
@@ -38,7 +39,7 @@ class Router:
                 self.health_manager.record_result(provider_name, model_id, (time.time() - start) * 1000, True)
                 return response
             except Exception as e:
-                self.health_manager.record_result(provider_name, model_id, (time.time() - start) * 1000, False)
+                self.health_manager.record_result(provider_name, model_id, (time.time() - start) * 1000, False, error_msg=str(e))
                 last_error = str(e)
                 # Scheduler will pick another healthy/cooling_down provider next time
                 continue

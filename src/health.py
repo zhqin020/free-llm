@@ -12,7 +12,7 @@ class HealthManager:
         self.error_rate_threshold = self.config.get("error_rate", 0.2)
         self.p90_latency_threshold = self.config.get("p90_latency_ms", 1200)
 
-    def record_result(self, provider_name: str, model_id: str, latency_ms: float, success: bool):
+    def record_result(self, provider_name: str, model_id: str, latency_ms: float, success: bool, error_msg: str = None):
         provider = self.registry.get_provider(provider_name)
         if not provider:
             return
@@ -32,6 +32,14 @@ class HealthManager:
                 provider.retry_count = 0
         else:
             model.error_count += 1
+            # Immediate exclusion for 429 (Quota Exhausted)
+            if error_msg and "429" in error_msg:
+                provider.status = "unstable"
+                provider.last_check_at = now
+                provider.retry_count += 1
+                # Mark all models of this provider as potentially exhausted for immediate exclusion
+                for m in provider.models.values():
+                    m.last_latency_ms = 9999 # Penalty
 
     def evaluate(self):
         now = time.time()
