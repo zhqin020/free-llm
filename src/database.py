@@ -21,6 +21,7 @@ class DatabaseManager:
                     type TEXT,
                     api_key TEXT,
                     url TEXT,
+                    api_url TEXT,
                     free BOOLEAN,
                     status TEXT,
                     token_price_1k REAL DEFAULT 0.0,
@@ -32,7 +33,8 @@ class DatabaseManager:
                     last_reset_day REAL,
                     retry_count INTEGER DEFAULT 0,
                     avg_error_rate REAL DEFAULT 0.0,
-                    p99_latency REAL DEFAULT 0.0
+                    p99_latency REAL DEFAULT 0.0,
+                    cool_down_until REAL
                 )
             """)
             cursor.execute("""
@@ -57,14 +59,16 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO providers (
-                    name, type, api_key, url, free, status, token_price_1k,
+                    name, type, api_key, url, api_url, free, status, token_price_1k,
                     max_quota_min, max_quota_day, current_quota_min, current_quota_day,
-                    last_reset_min, last_reset_day, retry_count, avg_error_rate, p99_latency
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_reset_min, last_reset_day, retry_count, avg_error_rate, p99_latency,
+                    cool_down_until
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                p.name, p.type, p.api_key, p.url, p.free, p.status, p.token_price_1k,
+                p.name, p.type, p.api_key, p.url, p.api_url, p.free, p.status, p.token_price_1k,
                 p.max_quota_min, p.max_quota_day, p.current_quota_min, p.current_quota_day,
-                p.last_reset_min, p.last_reset_day, p.retry_count, p.average_error_rate, p.p99_latency_ms
+                p.last_reset_min, p.last_reset_day, p.retry_count, p.average_error_rate, p.p99_latency_ms,
+                p.cool_down_until
             ))
             conn.commit()
             
@@ -97,15 +101,17 @@ class DatabaseManager:
                     free=bool(row['free']),
                     api_key=row['api_key'],
                     url=row['url'] if 'url' in row.keys() else "",
+                    api_url=row['api_url'] if 'api_url' in row.keys() else "",
                     token_price_1k=row['token_price_1k'],
                     max_quota_min=row['max_quota_min'],
                     max_quota_day=row['max_quota_day'],
                     current_quota_min=row['current_quota_min'],
                     current_quota_day=row['current_quota_day'],
-                    last_reset_min=row['last_reset_min'] or 0.0,
-                    last_reset_day=row['last_reset_day'] or 0.0,
+                    last_reset_min=row['last_reset_min'],
+                    last_reset_day=row['last_reset_day'],
                     status=row['status'],
-                    retry_count=row['retry_count']
+                    retry_count=row['retry_count'],
+                    cool_down_until=row['cool_down_until'] if 'cool_down_until' in row.keys() else None
                 )
                 
                 # Load models for this provider
@@ -113,7 +119,7 @@ class DatabaseManager:
                 m_rows = cursor.fetchall()
                 for m_row in m_rows:
                     m = ModelState(
-                        id=m_row['model_id'],
+                        id=m_row['model_id'] or m_row['id'],
                         tags=json.loads(m_row['tags']),
                         free=bool(m_row['free']),
                         price_input_1k=m_row['price_input_1k'],

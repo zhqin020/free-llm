@@ -139,6 +139,21 @@
         .status-healthy { background: hsla(142, 71%, 45%, 0.2); color: var(--status-healthy); }
         .status-unstable { background: hsla(0, 72%, 51%, 0.2); color: var(--status-unstable); }
         .status-cooling_down { background: hsla(48, 96%, 53%, 0.2); color: var(--status-cooling); }
+        .status-rate_limited { background: hsla(0, 100%, 50%, 0.2); color: #ff3333; border: 1px solid hsla(0, 100%, 50%, 0.4); }
+        .status-incomplete { background: hsla(0, 0%, 100%, 0.1); color: var(--text-dim); border: 1px dashed var(--text-dim); }
+        .cooldown-alert {
+            background: hsla(0, 72%, 51%, 0.1);
+            border: 1px solid hsla(0, 72%, 51%, 0.3);
+            border-radius: 8px;
+            padding: 0.8rem;
+            margin-bottom: 1.5rem;
+            color: #ff4d4d;
+            font-size: 0.85rem;
+            display: none;
+            align-items: center;
+            gap: 0.8rem;
+        }
+        .cooldown-alert.show { display: flex; }
 
         .quota-info { font-size: 0.8rem; margin-bottom: 1rem; }
         .quota-bar-container {
@@ -248,8 +263,12 @@
                 <input type="text" id="edit-key">
             </div>
             <div class="form-group">
-                <label>Provider URL</label>
+                <label>Developer/Website URL (for clicking name)</label>
                 <input type="text" id="edit-url">
+            </div>
+            <div class="form-group">
+                <label>API Endpoint URL (for LLM requests)</label>
+                <input type="text" id="edit-api-url">
             </div>
             <div class="form-group">
                 <label>Price per 1k tokens ($)</label>
@@ -272,17 +291,64 @@
         </div>
     </div>
 
+    <!-- API Test Modal -->
+    <div id="test-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <h2 style="margin-bottom: 1rem;" id="test-modal-title">API Test</h2>
+            
+            <div id="test-cooldown-alert" class="cooldown-alert">
+                <span style="font-size: 1.2rem;">⏳</span>
+                <div>
+                    <strong>Rate Limited:</strong> 
+                    This provider is currently in adaptive cooldown. 
+                    Retry available in <span id="test-cooldown-timer">0</span>s.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Test API Endpoint</label>
+                <input type="text" id="test-url">
+            </div>
+            <div class="form-group">
+                <label>Model ID</label>
+                <input type="text" id="test-model" list="test-model-options" placeholder="Select or type model ID...">
+                <datalist id="test-model-options"></datalist>
+            </div>
+            <div class="form-group">
+                <label>Test Message</label>
+                <textarea id="test-message" rows="3" style="width: 100%; background: hsla(0, 0%, 0%, 0.3); border: 1px solid hsla(0, 0%, 100%, 0.1); border-radius: 6px; color: var(--text-main); padding: 0.6rem; font-family: inherit; resize: vertical;"></textarea>
+            </div>
+            
+            <div id="test-result-container" style="display: none; margin-top: 1rem; padding: 1rem; background: hsla(0, 0%, 0%, 0.3); border-radius: 8px; border: 1px solid hsla(0, 0%, 100%, 0.05); position: relative;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <label style="font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">Result</label>
+                    <button id="btn-copy-test" style="font-size: 0.6rem; padding: 0.2rem 0.6rem; background: hsla(0, 0%, 100%, 0.1); display: flex; align-items: center; gap: 0.3rem;" onclick="copyTestResult()">
+                        <span>📋</span> Copy
+                    </button>
+                </div>
+                <div id="test-result" style="font-size: 0.9rem; white-space: pre-wrap; max-height: 250px; overflow-y: auto;"></div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 1rem; margin-top: 2rem;">
+                <button onclick="closeTestModal()">Close</button>
+                <button id="btn-update-url" style="display: none; border-color: var(--status-healthy);" onclick="applyTestUrl()">Use this URL</button>
+                <button class="primary" id="btn-run-test" onclick="runApiTest()">Run Test</button>
+            </div>
+        </div>
+    </div>
+
     <div id="notification"></div>
 
     <script>
         let currentEditingProvider = '';
+        let allProvidersData = [];
 
         async function refreshData() {
             setLoader(true);
             try {
                 const response = await fetch('/v1/providers');
-                const providers = await response.json();
-                renderProviders(providers);
+                allProvidersData = await response.json();
+                renderProviders(allProvidersData);
             } catch (err) {
                 showNotification("Failed to fetch data", "error");
             } finally {
@@ -291,20 +357,27 @@
         }
 
         function renderProviders(providers) {
-            const grid = document.getElementById('provider-grid');
-            const freeOnes = providers.filter(p => p.free);
-            const paidOnes = providers.filter(p => !p.free).sort((a,b) => a.token_price_1k - b.token_price_1k);
+            try {
+                const grid = document.getElementById('provider-grid');
+                if (!grid) return;
+                
+                const freeOnes = providers.filter(p => p.free);
+                const paidOnes = providers.filter(p => !p.free).sort((a,b) => a.token_price_1k - b.token_price_1k);
 
-            let html = '';
-            if (freeOnes.length > 0) {
-                html += '<div class="section-header">Free Resources</div>';
-                html += freeOnes.map(p => renderCard(p)).join('');
+                let html = '';
+                if (freeOnes.length > 0) {
+                    html += '<div class="section-header">Free Resources</div>';
+                    html += freeOnes.map(p => renderCard(p)).join('');
+                }
+                if (paidOnes.length > 0) {
+                    html += '<div class="section-header">Paid Resources (Sorted by Price)</div>';
+                    html += paidOnes.map(p => renderCard(p)).join('');
+                }
+                grid.innerHTML = html;
+            } catch (err) {
+                console.error("Render error:", err);
+                showNotification("Error rendering UI: " + err.message, "error");
             }
-            if (paidOnes.length > 0) {
-                html += '<div class="section-header">Paid Resources (Sorted by Price)</div>';
-                html += paidOnes.map(p => renderCard(p)).join('');
-            }
-            grid.innerHTML = html;
         }
 
         function renderCard(p) {
@@ -312,12 +385,20 @@
             const dayPct = p.max_quota_day > 0 ? (p.current_quota_day / p.max_quota_day) * 100 : 0;
 
             return `
-                <div class="provider-card">
+                <div class="provider-card" style="${!p.is_functional ? 'border-color: hsla(0, 72%, 51%, 0.3);' : ''}">
                     <div class="provider-header">
                         <div style="font-size: 1.2rem; font-weight: 600;">
                             ${p.url ? `<a href="${p.url}" target="_blank" class="provider-link" title="Open API Management Page">${p.name}</a>` : p.name}
+                            ${!p.is_functional ? '<span class="status-badge status-incomplete" title="Missing API Key or invalid URL" style="margin-left: 0.5rem; vertical-align: middle;">Incomplete</span>' : ''}
                         </div>
-                        <span class="status-badge status-${p.status}">${p.status.replace('_', ' ')}</span>
+                        ${(() => {
+                            const now = Date.now() / 1000;
+                            if (p.cool_down_until && p.cool_down_until > now) {
+                                const remaining = Math.ceil(p.cool_down_until - now);
+                                return `<span class="status-badge status-rate_limited" title="API Quota Exhausted">Rate Limited (${remaining}s)</span>`;
+                            }
+                            return `<span class="status-badge status-${p.status}">${p.status.replace('_', ' ')}</span>`;
+                        })()}
                     </div>
 
                     <div class="quota-info">
@@ -349,16 +430,24 @@
                     </div>
 
                     <div class="model-list">
-                        ${p.models.slice(0, 6).map(m => `
-                            <span class="model-tag ${m.free ? 'free' : ''}">${m.id.split('/').pop()}</span>
+                        ${(p.models || []).slice(0, 6).map(m => `
+                            <span class="model-tag ${m.free ? 'free' : ''}">${(m.id || '').split('/').pop()}</span>
                         `).join('')}
                         ${p.models.length > 6 ? `<span class="model-tag">+${p.models.length - 6}</span>` : ''}
                     </div>
 
                     <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <button style="font-size: 0.7rem; padding: 0.4rem 0.8rem;" 
-                            onclick="openEditModal('${p.name}', '${p.api_key}', '${p.url}', ${p.token_price_1k}, ${p.max_quota_min}, ${p.max_quota_day})">
+                            onclick="openEditModal('${p.name}', '${p.api_key}', '${p.url}', '${p.api_url}', ${p.token_price_1k}, ${p.max_quota_min}, ${p.max_quota_day})">
                             Edit
+                        </button>
+                        <button style="font-size: 0.7rem; padding: 0.4rem 0.8rem;" 
+                            onclick="openTestModal('${p.name}', '${p.api_key}', '${p.api_url}', '${p.models[0]?.id || ''}')">
+                            Test API
+                        </button>
+                        <button style="font-size: 0.7rem; padding: 0.4rem 0.8rem; background: var(--accent-primary); color: white;" 
+                            onclick="probeModels('${p.name}')">
+                            Refresh Models
                         </button>
                         <button style="font-size: 0.7rem; padding: 0.4rem 0.8rem;" 
                             onclick="providerAction('${p.name}', '${p.status === 'unstable' ? 'enable' : 'disable'}')">
@@ -369,11 +458,12 @@
             `;
         }
 
-        function openEditModal(name, key, url, price, qMin, qDay) {
+        function openEditModal(name, key, url, apiUrl, price, qMin, qDay) {
             currentEditingProvider = name;
             document.getElementById('modal-title').innerText = `Edit ${name}`;
             document.getElementById('edit-key').value = (key && key !== 'undefined') ? key : '';
             document.getElementById('edit-url').value = (url && url !== 'undefined') ? url : '';
+            document.getElementById('edit-api-url').value = (apiUrl && apiUrl !== 'undefined') ? apiUrl : '';
             document.getElementById('edit-price').value = price || 0;
             document.getElementById('edit-quota-min').value = qMin || 0;
             document.getElementById('edit-quota-day').value = qDay || 0;
@@ -382,12 +472,138 @@
 
         function closeModal() { document.getElementById('modal').classList.remove('show'); }
 
+        let testProviderData = {};
+
+        function openTestModal(name, key, url, modelId) {
+            testProviderData = { name, key, originalUrl: url };
+            document.getElementById('test-modal-title').innerText = `Test API: ${name}`;
+            document.getElementById('test-url').value = (url && url !== 'undefined') ? url : '';
+            document.getElementById('test-model').value = modelId;
+            document.getElementById('test-message').value = "Say 'Hello, I am working!' if you can hear me.";
+            document.getElementById('test-result-container').style.display = 'none';
+            document.getElementById('btn-update-url').style.display = 'none';
+
+            // Populate model datalist
+            const datalist = document.getElementById('test-model-options');
+            datalist.innerHTML = '';
+            const provider = allProvidersData.find(p => p.name === name);
+            if (provider && provider.models) {
+                provider.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    datalist.appendChild(opt);
+                });
+            }
+
+            // Check for cooldown
+            const alert = document.getElementById('test-cooldown-alert');
+            const timer = document.getElementById('test-cooldown-timer');
+            const now = Date.now() / 1000;
+            if (provider && provider.cool_down_until && provider.cool_down_until > now) {
+                alert.classList.add('show');
+                const updateTimer = () => {
+                    const rem = Math.ceil(provider.cool_down_until - (Date.now() / 1000));
+                    if (rem > 0) {
+                        timer.innerText = rem;
+                        setTimeout(updateTimer, 1000);
+                    } else {
+                        alert.classList.remove('show');
+                    }
+                };
+                updateTimer();
+            } else {
+                alert.classList.remove('show');
+            }
+
+            document.getElementById('test-modal').classList.add('show');
+        }
+
+        async function copyTestResult() {
+            const resultText = document.getElementById('test-result').innerText;
+            if (!resultText) return;
+            
+            try {
+                await navigator.clipboard.writeText(resultText);
+                const btn = document.getElementById('btn-copy-test');
+                const originalContent = btn.innerHTML;
+                btn.innerHTML = '<span>✅</span> Copied!';
+                btn.style.borderColor = 'var(--status-healthy)';
+                setTimeout(() => {
+                    btn.innerHTML = originalContent;
+                    btn.style.borderColor = '';
+                }, 2000);
+            } catch (err) {
+                showNotification("Failed to copy", "error");
+            }
+        }
+
+        function closeTestModal() { document.getElementById('test-modal').classList.remove('show'); }
+
+        async function runApiTest() {
+            const runner = document.getElementById('btn-run-test');
+            runner.innerText = "Testing...";
+            runner.disabled = true;
+            
+            const payload = {
+                provider_name: testProviderData.name,
+                url: document.getElementById('test-url').value,
+                api_key: testProviderData.key,
+                model_id: document.getElementById('test-model').value,
+                message: document.getElementById('test-message').value
+            };
+
+            try {
+                const res = await fetch('/admin/providers/test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                document.getElementById('test-result-container').style.display = 'block';
+                const resultArea = document.getElementById('test-result');
+                
+                if (res.ok && data.status === "success") {
+                    resultArea.innerText = data.response;
+                    resultArea.style.color = "var(--status-healthy)";
+                    if (payload.url !== testProviderData.originalUrl) {
+                        document.getElementById('btn-update-url').style.display = 'block';
+                    }
+                } else {
+                    resultArea.innerText = data.detail || (data.status === "error" ? data.detail : "Test failed");
+                    resultArea.style.color = "var(--status-unstable)";
+                }
+            } catch (err) {
+                showNotification("Test request failed", "error");
+            } finally {
+                runner.innerText = "Run Test";
+                runner.disabled = false;
+            }
+        }
+
+        async function applyTestUrl() {
+            const newUrl = document.getElementById('test-url').value;
+            try {
+                const res = await fetch('/admin/providers/update', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name: testProviderData.name, api_url: newUrl })
+                });
+                if (res.ok) {
+                    showNotification("URL updated successfully");
+                    closeTestModal();
+                    refreshData();
+                }
+            } catch (err) { showNotification("Update failed", "error"); }
+        }
+
         async function saveProviderChanges() {
             const val = (id) => document.getElementById(id).value;
             const payload = {
                 name: currentEditingProvider,
                 api_key: val('edit-key'),
                 url: val('edit-url'),
+                api_url: val('edit-api-url'),
                 token_price_1k: val('edit-price') ? parseFloat(val('edit-price')) : 0,
                 max_quota_min: val('edit-quota-min') ? parseInt(val('edit-quota-min')) : 0,
                 max_quota_day: val('edit-quota-day') ? parseInt(val('edit-quota-day')) : 0
@@ -434,6 +650,33 @@
                 refreshData();
             } catch (err) { showNotification("Sync failed", "error"); }
             finally { setLoader(false); }
+        }
+
+        async function probeModels(name) {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Refreshing...';
+            btn.disabled = true;
+
+            try {
+                const resp = await fetch('/admin/providers/probe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider_name: name })
+                });
+                const result = await resp.json();
+                if (result.status === 'success') {
+                    showNotification(`Success! Discovered ${result.discovered_count} new models for ${name}.`);
+                    refreshData();
+                } else {
+                    showNotification('Discovery failed: ' + (result.detail || result.error), "error");
+                }
+            } catch (e) {
+                showNotification('Connection error: ' + e, "error");
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
         }
 
         function setLoader(active) { document.getElementById('loader').classList.toggle('active', active); }

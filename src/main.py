@@ -1,5 +1,7 @@
 import os
 import asyncio
+import time
+_time = time
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
@@ -10,7 +12,8 @@ from .provider import ProviderRegistry, ProviderState, ModelState
 from .health import HealthManager
 from .scheduler import Scheduler
 from .router import Router
-from .admin import sync_from_github
+from .admin import sync_from_github, probe_provider_models
+from .adapters import adapter_registry
 
 from .database import DatabaseManager
 
@@ -78,6 +81,7 @@ class ProviderUpdate(BaseModel):
     token_price_1k: Optional[float] = None
     max_quota_min: Optional[int] = None
     max_quota_day: Optional[int] = None
+    api_url: Optional[str] = None
 
 @app.post("/admin/providers/update")
 async def update_provider(upd: ProviderUpdate):
@@ -90,9 +94,68 @@ async def update_provider(upd: ProviderUpdate):
     if upd.token_price_1k is not None: p.token_price_1k = upd.token_price_1k
     if upd.max_quota_min is not None: p.max_quota_min = upd.max_quota_min
     if upd.max_quota_day is not None: p.max_quota_day = upd.max_quota_day
+    if upd.api_url is not None: p.api_url = upd.api_url
     
     db.save_provider(p)
     return {"status": "success", "provider": p.name}
+
+
+class ProviderTestRequest(BaseModel):
+    provider_name: str
+    url: str
+    api_key: str
+    model_id: str
+    message: str = "Test message"
+
+@app.post("/admin/providers/test")
+async def test_provider(req: ProviderTestRequest):
+    # Always infer type from URL first to handle case where user changes URL in modal
+    p_type = None
+    if "openrouter.ai" in req.url: p_type = "openrouter"
+    elif "/v1beta/openai" in req.url: p_type = "google_ai_studio"
+    elif ":generateContent" in req.url or "generativelanguage" in req.url: p_type = "google_native"
+    
+    p = registry.get_provider(req.provider_name)
+    if p and p.cool_down_until and _time.time() < p.cool_down_until:
+        remaining = int(p.cool_down_until - _time.time())
+        raise HTTPException(status_code=429, detail=f"Rate limit active. Please wait {remaining}s before testing again.")
+
+    if not p_type:
+        p_type = p.type if p else "openai"
+
+    adapter = adapter_registry.get_adapter(p_type)
+    
+    try:
+        # Sanitize URL for logging (remove key)
+        log_url = req.url.split("?")[0].split("key=")[0]
+        print(f"DEBUG: Testing provider '{req.provider_name}' (Type: {p_type}) via {log_url} [Model: {req.model_id}]")
+        
+        start_time = _time.time()
+        resp = adapter.chat_completion(
+            api_key=req.api_key,
+            url=req.url,
+            model_id=req.model_id,
+            messages=[{"role": "user", "content": req.message}],
+            timeout=30
+        )
+        latency = (_time.time() - start_time) * 1000
+        health_manager.record_result(req.provider_name, req.model_id, latency, True)
+        
+        # Extract content from response
+        content = "Success (No content returned)"
+        if "choices" in resp and len(resp["choices"]) > 0:
+            content = resp["choices"][0].get("message", {}).get("content", content)
+        elif "candidates" in resp: # Google format
+             content = resp["candidates"][0].get("content", {}).get("parts", [{}])[0].get("text", content)
+            
+        print(f"DEBUG: Test for '{req.provider_name}' SUCCESS. Response preview: {str(content)[:100]}...")
+        return {"status": "success", "response": content}
+    except Exception as e:
+        err_msg = str(e)
+        print(f"ERROR: Test for '{req.provider_name}' FAILED: {err_msg}")
+        # Report failure to health manager (triggers Smart 429 if applicable)
+        health_manager.record_result(req.provider_name, req.model_id, 0, False, error_msg=err_msg)
+        return {"status": "error", "detail": err_msg}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -130,15 +193,18 @@ def list_providers():
             "free": p.free,
             "api_key": p.api_key if p.api_key else "",
             "url": p.url if p.url else "",
+            "api_url": p.api_url if p.api_url else "",
             "token_price_1k": p.token_price_1k,
             "max_quota_min": p.max_quota_min,
             "max_quota_day": p.max_quota_day,
             "current_quota_min": p.current_quota_min,
             "current_quota_day": p.current_quota_day,
             "status": p.status,
+            "is_functional": p.is_functional,
             "retry_count": p.retry_count,
             "avg_error_rate": p.average_error_rate,
             "p99_latency": p.p99_latency_ms,
+            "cool_down_until": p.cool_down_until,
             "models": [
                 {
                     "id": m.id,
@@ -205,3 +271,27 @@ def provider_action(action: ProviderAction):
         raise HTTPException(status_code=400, detail="unknown action")
     
     return {"provider": prov.name, "status": prov.status}
+    
+
+class ProviderProbeRequest(BaseModel):
+    provider_name: str
+
+@app.post("/admin/registry/reload")
+async def reload_registry():
+    new_providers = db.load_all_providers()
+    # Clear and re-add to maintain same registry instance
+    for p_name in list(registry.providers.keys()):
+        del registry.providers[p_name]
+    for p in new_providers:
+        registry.add_provider(p)
+    return {"status": "success", "count": len(new_providers)}
+
+@app.post("/admin/providers/probe")
+async def probe_provider(req: ProviderProbeRequest):
+    result = probe_provider_models(req.provider_name, registry, db=db)
+    if "error" in result:
+        # We don't necessarily want to 500 here if it's just a "Could not discover" error,
+        # but for placeholder keys or not found, we should.
+        if "Missing or placeholder" in result["error"] or "not found" in result["error"]:
+             raise HTTPException(status_code=400, detail=result["error"])
+    return result

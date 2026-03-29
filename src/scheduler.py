@@ -10,18 +10,28 @@ class Scheduler:
         self.scheduler_config = scheduler_config
 
     def _candidate_models(self, task_type: str) -> List[tuple]:
+        import time
+        now = time.time()
         profile = self.task_profiles.get(task_type, {})
         candidates = []
 
         for provider in self.registry.all_providers():
+            # 1. Check strict exclusion status
             if provider.status == "unstable":
                 continue
                 
-            # Check Quota
-            if not provider.check_and_update_quota(tokens=0): # Check without consuming
+            # 2. Check Smart Cooldown
+            if provider.cool_down_until and now < provider.cool_down_until:
+                continue
+                
+            # 3. Check Quota and Functional Status
+            if not provider.is_functional or not provider.check_and_update_quota(tokens=0): 
                 continue
             
             for model in provider.models.values():
+                # 4. Check Model Cooldown
+                if model.cool_down_until and now < model.cool_down_until:
+                    continue
                 tag_match = True
                 if profile and profile.get('candidate_tags'):
                     if not set(profile['candidate_tags']).intersection(set(model.tags or [])):

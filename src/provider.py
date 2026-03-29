@@ -15,6 +15,7 @@ class ModelState:
     success_count: int = 0
     error_count: int = 0
     last_used_at: Optional[float] = None
+    cool_down_until: Optional[float] = None
 
     @property
     def last_latency_ms(self) -> Optional[float]:
@@ -47,6 +48,7 @@ class ProviderState:
     free: bool = True
     api_key: str = ""
     url: str = ""
+    api_url: str = ""
     token_price_1k: float = 0.0
     max_quota_min: int = 0  # 0 means unlimited
     max_quota_day: int = 0
@@ -58,6 +60,7 @@ class ProviderState:
     status: str = "unknown"  # healthy, unstable, cooling_down
     last_check_at: Optional[float] = None
     retry_count: int = 0
+    cool_down_until: Optional[float] = None
 
     def check_and_update_quota(self, tokens: int = 1) -> bool:
         now = time.time()
@@ -81,6 +84,25 @@ class ProviderState:
         # Update
         self.current_quota_min += tokens
         self.current_quota_day += tokens
+        return True
+
+    @property
+    def is_functional(self) -> bool:
+        # Check API Key
+        if not self.api_key:
+            return False
+        # Placeholders
+        p_keys = ["YOUR_", "EXAMPLE", "PLACEHOLDER", "AIzaSyA7mP3J8YL1hUUtuDTj0FD0YHiOhAz04Wk"] # Wait, don't hardcode the key.
+        # Use common placeholder patterns
+        if any(p in self.api_key for p in ["YOUR_", "EXAMPLE", "PLACEHOLDER"]):
+            return False
+        # Check API URL
+        if not self.api_url:
+            return False
+        # Documentation links are NOT functional API endpoints
+        doc_patterns = ["docs.mistral.ai", "openrouter.ai/docs", "cloud.google.com", "documentation", "getting-started"]
+        if any(p in self.api_url.lower() for p in doc_patterns):
+            return False
         return True
 
     @property
